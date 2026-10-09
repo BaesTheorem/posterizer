@@ -103,6 +103,18 @@
 	                </div>
 	              </div>
 
+	              <div class="row">
+	                <p>Assembly <span class="grey-text" style="font-weight:normal">&mdash; "Printer margin" keeps the image out of the un-printable white border so no scaling is needed; each tile gets a cut line to trim to. "Overlap" adds a shared image band so tiles can be glued with slack instead of aligned perfectly (set 0 to butt trimmed edges).</span></p>
+	                <div class="input-field col s3">
+	                  <input value="0.25" id="printMargin" type="number" min="0" max="2" step="0.05">
+	                  <label class="active" for="printMargin">Printer margin (in)</label>
+	                </div>
+	                <div class="input-field col s3">
+	                  <input value="0.5" id="tileOverlap" type="number" min="0" max="4" step="0.1">
+	                  <label class="active" for="tileOverlap">Overlap (in)</label>
+	                </div>
+	              </div>
+
 
 	            </div>
 

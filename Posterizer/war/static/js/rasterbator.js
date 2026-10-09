@@ -9,6 +9,20 @@ var rasterbation = {
 	targetTileHeight: null,
 	targetTileDPI: 300,
 
+	// printMargin: the printer's non-printable white border (inches). Each tile's
+	// image is kept inside this border and a cut line is drawn at its edge, so the
+	// border can be trimmed off and neighbouring tiles butted together seamlessly.
+	printMargin: 0.25,
+	// tileOverlap: extra image (inches) shared between neighbouring tiles so they can
+	// be overlapped and glued with some slack instead of aligned perfectly. 0 = pure butt.
+	tileOverlap: 0.5,
+	// printable area (full tile minus the margin on every side) - computed at rasterize time
+	printTileWidth: null,
+	printTileHeight: null,
+	printTileWidthPX: null,
+	printTileHeightPX: null,
+	tileOverlapPX: 0,
+
 	sourceImage: null,
 	sourceImageRaster: null,
 	sourceImageScaleFactor: null,
@@ -20,6 +34,12 @@ var rasterbation = {
 	calculateNeededPX: function() {
 		this.targetTileWidthPX = this.targetTileWidth * this.targetTileDPI;
 		this.targetTileHeightPX = this.targetTileHeight * this.targetTileDPI;
+
+		// printable area = full sheet minus the printer's non-printable border on every side
+		this.printTileWidth = Math.max(this.targetTileWidth - (2 * this.printMargin), 0.1);
+		this.printTileHeight = Math.max(this.targetTileHeight - (2 * this.printMargin), 0.1);
+		this.printTileWidthPX = Math.round(this.printTileWidth * this.targetTileDPI);
+		this.printTileHeightPX = Math.round(this.printTileHeight * this.targetTileDPI);
 	},
 
 	setImage: function(imageUrl, callback) {
@@ -113,8 +133,8 @@ var rasterbation = {
 		scaledTile = Object.create(tile);
 		scaledTile.x = scaleFactor * scaledTile.x;
 		scaledTile.y = scaleFactor * scaledTile.y;
-		scaledTile.width = scaleFactor * this.targetTileWidthPX;
-		scaledTile.height = scaleFactor * this.targetTileHeightPX;
+		scaledTile.width = scaleFactor * tile.width;
+		scaledTile.height = scaleFactor * tile.height;
 		return scaledTile;
 	},
 
@@ -149,10 +169,20 @@ var rasterbation = {
 		// calculate the needed tile resolution for print quality
 		this.calculateNeededPX();
 
-		// calculate the tiled image aspect ratio
-		var totalTilesWidth = this.targetTileWidthPX * this.horizontalTilesCount;
-		var totalTilesHeight = this.targetTileHeightPX * this.verticalTilesCount;
-		
+		// each tile shows its printable area; neighbours share an "overlap" band, so the
+		// poster only advances by (printable - overlap) per tile. overlap 0 = pure butt.
+		var overlapPX = Math.round(this.tileOverlap * this.targetTileDPI);
+		overlapPX = Math.min(overlapPX, Math.min(this.printTileWidthPX, this.printTileHeightPX) - 1);
+		if (overlapPX < 0) { overlapPX = 0; }
+		this.tileOverlapPX = overlapPX;
+
+		var stepWidthPX = this.printTileWidthPX - overlapPX;
+		var stepHeightPX = this.printTileHeightPX - overlapPX;
+
+		// calculate the tiled image aspect ratio (n steps plus one trailing overlap band)
+		var totalTilesWidth = (this.horizontalTilesCount * stepWidthPX) + overlapPX;
+		var totalTilesHeight = (this.verticalTilesCount * stepHeightPX) + overlapPX;
+
 		var tilesGCD = gcd(totalTilesWidth, totalTilesHeight);
 		var tilesWidthRatio = totalTilesWidth / tilesGCD;
 		var tilesHeightRatio = totalTilesHeight / tilesGCD;
@@ -185,10 +215,10 @@ var rasterbation = {
 		for (var verticalTileIndex = 0; verticalTileIndex < this.verticalTilesCount; verticalTileIndex++) {
 			for (var horizontalTileIndex = 0; horizontalTileIndex < this.horizontalTilesCount; horizontalTileIndex++) {
 				tile = new Object();
-				tile.x = tilesHorizontalMargin + (horizontalTileIndex * this.targetTileWidthPX);
-				tile.y = tilesVerticalMargin + (verticalTileIndex * this.targetTileHeightPX);
-				tile.width = this.targetTileWidthPX;
-				tile.height = this.targetTileHeightPX;
+				tile.x = tilesHorizontalMargin + (horizontalTileIndex * stepWidthPX);
+				tile.y = tilesVerticalMargin + (verticalTileIndex * stepHeightPX);
+				tile.width = this.printTileWidthPX;
+				tile.height = this.printTileHeightPX;
 				tile.horizontalIndex = horizontalTileIndex;
 				tile.verticalIndex = verticalTileIndex;
 				
@@ -534,8 +564,9 @@ var rasterbation = {
 		this.unit = "in"
 		this.imageQuality = 1;
 
-		this.printHorizontalMargin = 0.75;
-		this.printVerticalMargin = 0.75;
+		// the image is inset by the printer margin on every side (in inches)
+		this.printHorizontalMargin = rasterbation.printMargin;
+		this.printVerticalMargin = rasterbation.printMargin;
 
 		// update PDF orientation
 		this.tileOrientationSelector = document.getElementById("tileOrientationSelector");
@@ -546,20 +577,22 @@ var rasterbation = {
 		if (this.tilePresetSelector.value != "custom") {
 			this.size = this.tilePresetSelector.value;
 		} else {
-			// TODO: offer selection
-			this.size = "a4";
+			// build the page from the exact custom tile dimensions (inches) instead of
+			// forcing A4, and match the orientation so jsPDF does not swap the axes
+			this.size = [rasterbation.targetTileWidth, rasterbation.targetTileHeight];
+			this.orientation = rasterbation.targetTileWidth >= rasterbation.targetTileHeight ? "landscape" : "portrait";
 		}
 
 		this.doc = new jsPDF(this.orientation, this.unit, this.size);
 
 		this.tileCanvas = document.createElement('canvas');
 		this.tileCanvasContext = this.tileCanvas.getContext('2d');
-		this.tileCanvas.width  = rasterbation.targetTileWidthPX;
-		this.tileCanvas.height = rasterbation.targetTileHeightPX;
+		this.tileCanvas.width  = rasterbation.printTileWidthPX;
+		this.tileCanvas.height = rasterbation.printTileHeightPX;
 
 		this.tileImageData = null;
-		this.tilesHorizontalMargin = 0;
-		this.tilesVerticalMargin = 0;
+		this.tilesHorizontalMargin = rasterbation.printMargin;
+		this.tilesVerticalMargin = rasterbation.printMargin;
 
 		this.startRendering = function() {
 			this.tileIndex = 0;
@@ -608,7 +641,13 @@ var rasterbation = {
 
 			// extract canvas data and render to PDF
 			this.tileImageData = this.tileCanvas.toDataURL("image/jpeg", this.imageQuality);
-			this.doc.addImage(this.tileImageData, 'JPEG', this.tilesHorizontalMargin, this.tilesVerticalMargin, rasterbation.targetTileWidth, rasterbation.targetTileHeight);
+			this.doc.addImage(this.tileImageData, 'JPEG', this.tilesHorizontalMargin, this.tilesVerticalMargin, rasterbation.printTileWidth, rasterbation.printTileHeight);
+
+			// draw a cut line around the printable area: trim the white printer border to
+			// here, then butt (or overlap, if an overlap band was set) the neighbouring tiles
+			this.doc.setLineWidth(0.008);
+			this.doc.setDrawColor(170, 170, 170);
+			this.doc.rect(this.tilesHorizontalMargin, this.tilesVerticalMargin, rasterbation.printTileWidth, rasterbation.printTileHeight);
 
 			// add a new page for the next tile
 			this.doc.addPage();
@@ -628,7 +667,18 @@ var rasterbation = {
 
 		// create ZIP file
 		this.zip = new JSZip();
-		this.zip.file("info.txt", "Created by posterizer.online\n");
+		this.zip.file("info.txt",
+			"Created by posterizer.online\n\n" +
+			"Each tile below is already trimmed to the printable area (the printer's white\n" +
+			"border is not part of the image), so print WITHOUT any 'fit to page' scaling -\n" +
+			"print at 100% / actual size.\n\n" +
+			"Assembly:\n" +
+			"1. Print every tile at 100%.\n" +
+			"2. Trim the white printer border off the top and left edge of each sheet.\n" +
+			"3. Lay the tiles out in a grid (filenames are tile_row_R_col_C).\n" +
+			"4. Overlap of " + rasterbation.tileOverlap + " in was baked into neighbouring tiles: slide each sheet\n" +
+			"   over its neighbour until the images line up, then glue. Set overlap to 0 in the\n" +
+			"   app if you would rather butt the trimmed edges together with no overlap.\n");
 		this.tilesFolder = this.zip.folder("tiles");
 
 		// add raster
@@ -639,11 +689,11 @@ var rasterbation = {
 		this.previewCanvas = document.getElementById('previewCanvas');
 		this.zip.file("preview.jpg", getBase64FromCanvas(this.previewCanvas), {base64: true});
 
-		// add tiles
+		// add tiles (sized to the printable area, matching the PDF export)
 		this.tileCanvas = document.createElement('canvas');
 		this.tileCanvasContext = this.tileCanvas.getContext('2d');
-		this.tileCanvas.width  = rasterbation.targetTileWidthPX;
-		this.tileCanvas.height = rasterbation.targetTileHeightPX;
+		this.tileCanvas.width  = rasterbation.printTileWidthPX;
+		this.tileCanvas.height = rasterbation.printTileHeightPX;
 
 		this.startRendering = function() {
 			this.tileIndex = 0;
@@ -806,7 +856,27 @@ function initRasterbation() {
 		rasterbation.refreshRenderings(true);
 	};
 	rasterbation.verticalTilesCount = parseInt(verticalTilesCount.value);
-	
+
+	var printMarginInput = document.getElementById("printMargin");
+	if (printMarginInput != null) {
+		printMarginInput.onchange = function() {
+			var value = parseFloat(printMarginInput.value);
+			rasterbation.printMargin = (isNaN(value) || value < 0) ? 0 : value;
+			rasterbation.refreshRenderings(true);
+		};
+		rasterbation.printMargin = parseFloat(printMarginInput.value);
+	}
+
+	var tileOverlapInput = document.getElementById("tileOverlap");
+	if (tileOverlapInput != null) {
+		tileOverlapInput.onchange = function() {
+			var value = parseFloat(tileOverlapInput.value);
+			rasterbation.tileOverlap = (isNaN(value) || value < 0) ? 0 : value;
+			rasterbation.refreshRenderings(true);
+		};
+		rasterbation.tileOverlap = parseFloat(tileOverlapInput.value);
+	}
+
 	var tileUnitSelector = document.getElementById("tileUnitSelector");
 	tileUnitSelector.onchange = function() {
 		var tileWidth = document.getElementById("tileWidth");
